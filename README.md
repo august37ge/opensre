@@ -231,7 +231,7 @@ See [SECURITY.md](SECURITY.md) for responsible disclosure.
 
 ## Telemetry
 
-`opensre` collects anonymous usage statistics to help us understand adoption
+`opensre` collects anonymous usage statistics with Posthog to help us understand adoption
 and demonstrate traction to sponsors and investors who fund the project.
 What we collect: command name, CLI version, Python version, and OS family.
 A randomly generated anonymous ID is created on first run and stored in
