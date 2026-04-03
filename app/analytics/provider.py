@@ -33,6 +33,19 @@ _CI_ENV_VARS: Final[tuple[str, ...]] = (
     "TEAMCITY_VERSION",
 )
 _DEBUG_PREFIX = "[telemetry]"
+_DEBUG_REDACTED_VALUE = "[REDACTED]"
+_SENSITIVE_DEBUG_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "authorization",
+        "client_secret",
+        "password",
+        "refresh_token",
+        "secret",
+        "token",
+    }
+)
 _SEND_TIMEOUT = 1.0
 
 type PropertyValue = str | bool | int
@@ -121,8 +134,23 @@ def _build_payload(event: Event, properties: Properties | None = None) -> dict[s
     }
 
 
+def _redact_sensitive_values(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, nested_value in value.items():
+            if key.lower() in _SENSITIVE_DEBUG_KEYS:
+                redacted[key] = _DEBUG_REDACTED_VALUE
+            else:
+                redacted[key] = _redact_sensitive_values(nested_value)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive_values(item) for item in value]
+    return value
+
+
 def _debug_log(payload: dict[str, object]) -> None:
-    print(f"{_DEBUG_PREFIX} {json.dumps(payload, sort_keys=True)}", file=sys.stderr)
+    safe_payload = _redact_sensitive_values(payload)
+    print(f"{_DEBUG_PREFIX} {json.dumps(safe_payload, sort_keys=True)}", file=sys.stderr)
 
 
 def capture(event: Event, properties: Properties | None = None) -> None:

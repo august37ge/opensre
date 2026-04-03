@@ -160,8 +160,21 @@ def test_debug_mode_logs_payload_without_network_send(monkeypatch, tmp_path: Pat
 
     monkeypatch.setattr(provider.httpx, "post", fail_post)
 
-    provider.capture_first_run_if_needed()
+    provider.capture(
+        Event.COMMAND_COMPLETED,
+        {
+            "access_token": "super-secret-token",
+            "command": "health",
+            "duration_ms": 12,
+            "exit_code": 0,
+            "success": True,
+        },
+    )
     output = capsys.readouterr().err
 
     assert "[telemetry]" in output
-    assert Event.INSTALL_DETECTED.value in output
+    assert Event.COMMAND_COMPLETED.value in output
+    assert provider._POSTHOG_API_KEY not in output
+    assert "super-secret-token" not in output
+    assert '"api_key": "[REDACTED]"' in output
+    assert '"access_token": "[REDACTED]"' in output
