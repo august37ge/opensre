@@ -36,9 +36,6 @@ from app.analytics.cli import (
 from app.analytics.provider import capture_first_run_if_needed, shutdown_analytics
 from app.version import get_version
 
-# Heavy application imports are kept inside command functions so the CLI starts
-# fast and so that load_dotenv() in main() runs before any app module reads env.
-
 _SETUP_SERVICES = [
     "aws",
     "coralogix",
