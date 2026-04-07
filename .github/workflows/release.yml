@@ -19,11 +19,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  gate-and-resolve-tag:
+  prepare:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.tag.outputs.tag_name }}
-      should_run: ${{ steps.gate.outputs.should_run }}
 
     steps:
       - uses: actions/checkout@v5
@@ -46,51 +45,9 @@ jobs:
           day="$(date -u +%-d)"
           echo "tag_name=v${year}.${month}.${day}" >> "$GITHUB_OUTPUT"
 
-      - name: Gate on CI passing for latest main commit (schedule/manual)
-        id: gate
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          default_branch="${{ github.event.repository.default_branch }}"
-          git fetch origin "$default_branch"
-          head_sha="$(git rev-parse "origin/$default_branch")"
-
-          run_json="$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs" \
-            -f branch="$default_branch" \
-            -f event="push" \
-            -f status="completed" \
-            -f per_page="1")"
-          conclusion="$(printf '%s' "$run_json" | jq -r '.workflow_runs[0].conclusion // empty')"
-          run_sha="$(printf '%s' "$run_json" | jq -r '.workflow_runs[0].head_sha // empty')"
-
-          if [ -z "$conclusion" ] || [ -z "$run_sha" ]; then
-            echo "Could not resolve latest CI run for $default_branch."
-            echo "$run_json"
-            exit 1
-          fi
-
-          if [ "$run_sha" != "$head_sha" ]; then
-            echo "Latest completed CI run is for $run_sha, but $default_branch is at $head_sha. Skipping."
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "$conclusion" != "success" ]; then
-            echo "CI is not passing for $default_branch@$head_sha (conclusion=$conclusion). Skipping."
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "CI passing for $default_branch@$head_sha."
-          echo "should_run=true" >> "$GITHUB_OUTPUT"
-
   verify:
     runs-on: ubuntu-latest
-    needs: gate-and-resolve-tag
-    if: needs.gate-and-resolve-tag.outputs.should_run == 'true'
+    needs: prepare
 
     steps:
       - uses: actions/checkout@v5
@@ -234,10 +191,9 @@ jobs:
   publish-release:
     runs-on: ubuntu-latest
     needs:
-      - gate-and-resolve-tag
+      - prepare
       - build-python-dist
       - build-binaries
-    if: needs.gate-and-resolve-tag.outputs.should_run == 'true'
 
     steps:
       - uses: actions/checkout@v5
@@ -259,7 +215,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          TAG_NAME="${{ needs.gate-and-resolve-tag.outputs.tag_name }}"
+          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
           default_branch="${{ github.event.repository.default_branch }}"
 
           git fetch origin "$default_branch" --tags --force
@@ -330,7 +286,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          TAG_NAME="${{ needs.gate-and-resolve-tag.outputs.tag_name }}"
+          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
           default_branch="${{ github.event.repository.default_branch }}"
           git fetch origin "$default_branch" --tags --force
           target_sha="$(git rev-parse "origin/$default_branch")"
