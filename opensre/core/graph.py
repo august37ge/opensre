@@ -81,11 +81,26 @@ class Graph:
         Args:
             depends_on: Names of nodes that must complete before this one.
             description: Human-readable description of the node's purpose.
+
+        Raises:
+            ValueError: If a listed dependency name has not been registered
+                yet. This catches typos in depends_on at definition time
+                rather than silently producing a broken graph.
         """
         depends_on = depends_on or []
 
         def decorator(fn: Callable) -> Callable:
             node_name = fn.__name__
+
+            # Validate that all declared dependencies are already registered.
+            # Catches typos early instead of failing at execution time.
+            for dep in depends_on:
+                if dep not in self._nodes:
+                    raise ValueError(
+                        f"Node '{node_name}' depends on '{dep}', "
+                        f"which has not been registered yet."
+                    )
+
             graph_node = GraphNode(name=node_name, fn=fn, description=description)
             graph_node.upstream = list(depends_on)
 
@@ -96,68 +111,4 @@ class Graph:
 
             self._nodes[node_name] = graph_node
             logger.debug("Registered node '%s' with deps: %s", node_name, depends_on)
-            return fn
-
-        return decorator
-
-    # ------------------------------------------------------------------
-    # Execution
-    # ------------------------------------------------------------------
-
-    def _topological_order(self) -> List[str]:
-        """Return node names in topological execution order (Kahn's algorithm)."""
-        in_degree: Dict[str, int] = {name: 0 for name in self._nodes}
-        for node in self._nodes.values():
-            for dep in node.upstream:
-                if dep not in in_degree:
-                    raise ValueError(
-                        f"Node '{node.name}' depends on unknown node '{dep}'"
-                    )
-                in_degree[node.name] += 1
-
-        queue: deque[str] = deque(
-            name for name, deg in in_degree.items() if deg == 0
-        )
-        order: List[str] = []
-        visited: Set[str] = set()
-
-        while queue:
-            current = queue.popleft()
-            order.append(current)
-            visited.add(current)
-            for dependent in self._edges.get(current, []):
-                in_degree[dependent] -= 1
-                if in_degree[dependent] == 0:
-                    queue.append(dependent)
-
-        if len(order) != len(self._nodes):
-            raise RuntimeError(
-                "Cycle detected in graph '%s'; execution aborted." % self.name
-            )
-        return order
-
-    def execute(self, initial_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Execute all nodes in dependency order.
-
-        Args:
-            initial_context: Seed data passed into the shared context dict.
-
-        Returns:
-            The final context dict after all nodes have run.
-        """
-        context: Dict[str, Any] = initial_context or {}
-        order = self._topological_order()
-        logger.info("Executing graph '%s' — %d nodes", self.name, len(order))
-
-        for node_name in order:
-            node = self._nodes[node_name]
-            try:
-                result = node.run(context)
-                if result is not None:
-                    context[node_name] = result
-            except Exception as exc:  # noqa: BLE001
-                logger.error("Node '%s' failed: %s", node_name, exc)
-                raise
-
-        logger.info("Graph '%s' completed successfully.", self.name)
-        return context
+       
