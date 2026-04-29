@@ -94,21 +94,93 @@ class Graph:
 
             # Validate that all declared dependencies are already registered.
             # Catches typos early instead of failing at execution time.
+            # NOTE: This means nodes must be defined in dependency order.
             for dep in depends_on:
                 if dep not in self._nodes:
                     raise ValueError(
                         f"Node '{node_name}' depends on '{dep}', "
-                        f"which has not been registered yet."
+                        f"but '{dep}' has not been registered yet. "
+                        f"Registered nodes: {list(self._nodes.keys())}"
                     )
 
             graph_node = GraphNode(name=node_name, fn=fn, description=description)
             graph_node.upstream = list(depends_on)
+            self._nodes[node_name] = graph_node
 
             for dep in depends_on:
                 self._edges[dep].append(node_name)
-                if dep in self._nodes:
-                    self._nodes[dep].downstream.append(node_name)
+                self._nodes[dep].downstream.append(node_name)
 
-            self._nodes[node_name] = graph_node
-            logger.debug("Registered node '%s' with deps: %s", node_name, depends_on)
-       
+            return fn
+
+        return decorator
+
+    # ------------------------------------------------------------------
+    # Execution
+    # ------------------------------------------------------------------
+
+    def _topological_sort(self) -> List[str]:
+        """Return nodes in topological order using Kahn's algorithm.
+
+        Raises:
+            RuntimeError: If a cycle is detected in the graph.
+        """
+        in_degree: Dict[str, int] = {name: 0 for name in self._nodes}
+        for node_name, dependents in self._edges.items():
+            for dep in dependents:
+                in_degree[dep] += 1
+
+        queue: deque[str] = deque(
+            name for name, degree in in_degree.items() if degree == 0
+        )
+        order: List[str] = []
+
+        while queue:
+            # Sort the queue to get deterministic execution order among
+            # nodes that have no ordering constraint between them.
+            current = sorted(queue)[0]
+            queue.remove(current)
+            order.append(current)
+            for dependent in self._edges[current]:
+                in_degree[dependent] -= 1
+                if in_degree[dependent] == 0:
+                    queue.append(dependent)
+
+        if len(order) != len(self._nodes):
+            raise RuntimeError(
+                f"Cycle detected in graph '{self.name}'. "
+                f"Could not resolve execution order."
+            )
+
+        return order
+
+    def execute(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Execute all nodes in topological order.
+
+        Args:
+            context: Initial context dict passed to every node. Defaults to
+                an empty dict if not provided.
+
+        Returns:
+            The final context dict after all nodes have run.
+        """
+        ctx: Dict[str, Any] = context if context is not None else {}
+        order = self._topological_sort()
+        logger.info("Executing graph '%s' with order: %s", self.name, order)
+
+        for node_name in order:
+            node = self._nodes[node_name]
+            result = node.run(ctx)
+            # Store the return value under the node name for downstream nodes
+            # to access if needed (e.g. ctx["detect"] holds detect's return).
+            if result is not None:
+                ctx[node_name] = result
+
+        return ctx
+
+    # ------------------------------------------------------------------
+    # Introspection
+    # ------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        return f"Graph(name={self.name!r}, nodes={list(self._nodes.keys())})"
