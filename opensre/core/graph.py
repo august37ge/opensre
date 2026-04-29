@@ -98,9 +98,8 @@ class Graph:
             for dep in depends_on:
                 if dep not in self._nodes:
                     raise ValueError(
-                        f"Node '{node_name}' depends on '{dep}', "
-                        f"but '{dep}' has not been registered yet. "
-                        f"Registered nodes: {list(self._nodes.keys())}"
+                        f"Node '{node_name}' depends on '{dep}', which has not been "
+                        f"registered yet. Define '{dep}' before '{node_name}'."
                     )
 
             graph_node = GraphNode(name=node_name, fn=fn, description=description)
@@ -126,22 +125,20 @@ class Graph:
             RuntimeError: If a cycle is detected in the graph.
         """
         in_degree: Dict[str, int] = {name: 0 for name in self._nodes}
-        for node_name, dependents in self._edges.items():
-            for dep in dependents:
-                in_degree[dep] += 1
+        for node_name in self._nodes:
+            for dependent in self._edges[node_name]:
+                in_degree[dependent] += 1
 
+        # Start with all nodes that have no dependencies
         queue: deque[str] = deque(
-            name for name, degree in in_degree.items() if degree == 0
+            sorted(name for name, deg in in_degree.items() if deg == 0)
         )
         order: List[str] = []
 
         while queue:
-            # Sort the queue to get deterministic execution order among
-            # nodes that have no ordering constraint between them.
-            current = sorted(queue)[0]
-            queue.remove(current)
+            current = queue.popleft()
             order.append(current)
-            for dependent in self._edges[current]:
+            for dependent in sorted(self._edges[current]):
                 in_degree[dependent] -= 1
                 if in_degree[dependent] == 0:
                     queue.append(dependent)
@@ -149,7 +146,7 @@ class Graph:
         if len(order) != len(self._nodes):
             raise RuntimeError(
                 f"Cycle detected in graph '{self.name}'. "
-                f"Could not resolve execution order."
+                "Execution order cannot be determined."
             )
 
         return order
@@ -158,29 +155,38 @@ class Graph:
         """Execute all nodes in topological order.
 
         Args:
-            context: Initial context dict passed to every node. Defaults to
-                an empty dict if not provided.
+            context: Initial context dict passed to every node. A fresh
+                empty dict is used if none is provided.
 
         Returns:
-            The final context dict after all nodes have run.
+            The context dict after all nodes have run.
         """
+        # I prefer starting with an empty dict rather than requiring callers
+        # to always pass one in - makes quick ad-hoc runs less boilerplate.
         ctx: Dict[str, Any] = context if context is not None else {}
         order = self._topological_sort()
-        logger.info("Executing graph '%s' with order: %s", self.name, order)
+        logger.info("Executing graph '%s' | order: %s", self.name, order)
 
         for node_name in order:
             node = self._nodes[node_name]
-            result = node.run(ctx)
-            # Store the return value under the node name for downstream nodes
-            # to access if needed (e.g. ctx["detect"] holds detect's return).
-            if result is not None:
-                ctx[node_name] = result
+            logger.info("[%s] Starting node: %s", self.name, node_name)
+            node.run(ctx)
+            logger.info("[%s] Finished node: %s", self.name, node_name)
 
         return ctx
 
     # ------------------------------------------------------------------
-    # Introspection
+    # Introspection helpers
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
         return f"Graph(name={self.name!r}, nodes={list(self._nodes.keys())})"
+
+    def summary(self) -> str:
+        """Return a human-readable summary of the graph structure."""
+        lines = [f"Graph: {self.name}"]
+        for name, node in self._nodes.items():
+            deps = ", ".join(node.upstream) or "(none)"
+            desc = f" — {node.description}" if node.description else ""
+            lines.append(f"  {name} (depends_on: {deps}){desc}")
+        return "\n".join(lines)
