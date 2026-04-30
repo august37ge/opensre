@@ -103,109 +103,92 @@ class Graph:
                     )
 
             graph_node = GraphNode(name=node_name, fn=fn, description=description)
-            graph_node.upstream = list(depends_on)
-            self._nodes[node_name] = graph_node
 
-            # Wire up edges: each dependency gains this node as a dependent.
+            # Wire up upstream/downstream references
             for dep in depends_on:
-                self._edges[dep].append(node_name)
+                graph_node.upstream.append(dep)
                 self._nodes[dep].downstream.append(node_name)
+                self._edges[dep].append(node_name)
 
+            self._nodes[node_name] = graph_node
+            logger.debug("Registered node: %s (depends_on=%s)", node_name, depends_on)
             return fn
 
         return decorator
 
     # ------------------------------------------------------------------
-    # Introspection
+    # Execution
     # ------------------------------------------------------------------
 
-    def get_node(self, name: str) -> GraphNode:
-        """Return the GraphNode registered under *name*.
-
-        Raises:
-            KeyError: If no node with that name exists.
-        """
-        if name not in self._nodes:
-            raise KeyError(f"No node named '{name}' in graph '{self.name}'.")
-        return self._nodes[name]
-
-    def node_names(self) -> List[str]:
-        """Return a list of all registered node names (insertion order)."""
-        return list(self._nodes.keys())
-
-    # ------------------------------------------------------------------
-    # Topological sort
-    # ------------------------------------------------------------------
-
-    def _topological_order(self) -> List[str]:
-        """Return nodes in topological execution order using Kahn's algorithm.
+    def _topological_sort(self) -> List[str]:
+        """Return nodes in topological order using Kahn's algorithm.
 
         Raises:
             RuntimeError: If a cycle is detected in the graph.
         """
         in_degree: Dict[str, int] = {name: 0 for name in self._nodes}
-        for node_name, dependents in self._edges.items():
-            for dep in dependents:
-                in_degree[dep] += 1
+        for node_name in self._nodes:
+            for dependent in self._edges[node_name]:
+                in_degree[dependent] += 1
 
-        # Start with nodes that have no dependencies.
-        queue: deque[str] = deque(
+        queue: deque = deque(
             name for name, degree in in_degree.items() if degree == 0
         )
         order: List[str] = []
 
         while queue:
-            # Sort candidates alphabetically for deterministic ordering within
-            # the same dependency level -- makes test output predictable.
-            current = queue.popleft()
+            # Sort the queue at each step for deterministic ordering among
+            # nodes that have no dependency relationship with each other.
+            # This makes execution order predictable and easier to debug.
+            current = sorted(queue)[0]
+            queue.remove(current)
             order.append(current)
-            for dependent in sorted(self._edges[current]):
+            for dependent in self._edges[current]:
                 in_degree[dependent] -= 1
                 if in_degree[dependent] == 0:
                     queue.append(dependent)
 
         if len(order) != len(self._nodes):
             raise RuntimeError(
-                f"Cycle detected in graph '{self.name}'. "
-                "Execution order cannot be determined."
+                f"Graph '{self.name}' contains a cycle; cannot execute."
             )
 
         return order
-
-    # ------------------------------------------------------------------
-    # Execution
-    # ------------------------------------------------------------------
 
     def execute(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute all nodes in topological order.
 
         Args:
             context: Optional initial context dict passed to every node.
-                     Nodes may read from and write to this shared dict.
                      Defaults to an empty dict if not provided.
 
         Returns:
             The final context dict after all nodes have run.
         """
-        # Default to an empty context rather than using a mutable default arg.
-        ctx: Dict[str, Any] = context if context is not None else {}
+        # Default to empty context if none supplied
+        if context is None:
+            context = {}
 
-        order = self._topological_order()
-        logger.info(
-            "Executing graph '%s' | nodes: %s", self.name, " -> ".join(order)
-        )
+        order = self._topological_sort()
+        logger.info("Executing graph '%s' | order: %s", self.name, order)
 
         for node_name in order:
             node = self._nodes[node_name]
             try:
-                node.run(ctx)
+                node.run(context)
             except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "Graph '%s': node '%s' raised an exception: %s",
-                    self.name,
-                    node_name,
-                    exc,
-                )
+                logger.error("Node '%s' failed: %s", node_name, exc)
                 raise
 
-        return ctx
+        return context
+
+    # ------------------------------------------------------------------
+    # Introspection helpers
+    # ------------------------------------------------------------------
+
+    def node_names(self) -> List[str]:
+        """Return the list of registered node names in insertion order."""
+        return list(self._nodes.keys())
+
+    def __repr__(self) -> str:
+        return f"Graph(name={self.name!r}, nodes={self.node_names()})"
